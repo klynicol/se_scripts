@@ -1,0 +1,1 @@
+# Initialized for random scripts I'm writing for Space Engineers
