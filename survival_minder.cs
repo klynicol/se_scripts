@@ -1,4 +1,10 @@
 const string SHIP_NAME = "Gondor_01";
+const float DRILL_PISTON_VELOCITY = 0.0005f;
+// Spirograph for the win!!!
+const float DRILL_ROTOR_VELOCITY = 0.25f;
+const float DRILL_RATIO = 8f;
+
+bool isCargoFull = true;
 
 IMyCockpit controller;
 IMyTextPanel lcdTop;
@@ -7,9 +13,7 @@ IMyMotorStator motor;
 IMyMotorAdvancedStator drillInnerRotor;
 IMyMotorAdvancedStator drillOuterRotor;
 IMyShipDrill drill;
-// Spirograph for the win!!!
-float drillRotorVelocity = 0.25f;
-float drillRatio = 8f;
+
 List<string> bottomLcdText = new List<string>();
 List<string> topLcdText = new List<string>();
 List<string> controller1Text = new List<string>();
@@ -46,6 +50,16 @@ IMyShipMergeBlock mergeDrillExecute; // key 4
 IMyShipMergeBlock mergeDrillRetract; // key 5
 IMyShipMergeBlock mergeLanders; // key 7 - toggle land or "not land"
 
+/**
+Deploy drill if:
+- mergeDrillExecute is enabled
+- landerState is Deployed
+- cargo is not full
+Retract drill if:
+- mergeDrillRetract is enabled
+- landerState is Retracted
+*/
+
 public Program()
 {
     Runtime.UpdateFrequency = UpdateFrequency.Update10; // Run every 10 ticks
@@ -60,7 +74,7 @@ public Program()
     mergeLanders = GridTerminalSystem.GetBlockWithName("MERGE_Landers") as IMyShipMergeBlock;
     drillInnerRotor = GridTerminalSystem.GetBlockWithName("DRILL_InnerRotor") as IMyMotorAdvancedStator;
     drillOuterRotor = GridTerminalSystem.GetBlockWithName("DRILL_OuterRotor") as IMyMotorAdvancedStator;
-    drill = GridTerminalSystem.GetBlockWithName("Drill") as IMyShipDrill;
+    drill = GridTerminalSystem.GetBlockWithName("DRILL") as IMyShipDrill;
 
     // get drill pistons from group name "DRILL_Pistons"
     IMyBlockGroup drillPistonsGroup = GridTerminalSystem.GetBlockGroupWithName("DRILL_PISTONS");
@@ -75,7 +89,13 @@ public Program()
         cargoGroup.GetBlocksOfType<IMyCargoContainer>(cargoContainers);
     }
 
-    beacon = GridTerminalSystem.GetBlockWithName("BEACON") as IMyBeacon;
+    // get the first beacon in the grid
+    List<IMyBeacon> beacons = new List<IMyBeacon>();
+    GridTerminalSystem.GetBlocksOfType<IMyBeacon>(beacons);
+    if (beacons.Count > 0)
+    {
+        beacon = beacons[0];
+    }
 
     // Write instructions for user
     controller.GetSurface(1).WriteText(
@@ -126,76 +146,24 @@ private void InitLanders()
 public void Main(string argument, UpdateType updateSource)
 {
     // When the remote control is activated, the motor will start spinning
-    bottomLcdText.Clear();
-    bottomLcdText.Add("Machine Stats:");
-    topLcdText.Clear();
     controller1Text.Clear();
-    controller1Text.Add("Controll Status:");
-
-    // What are the states??
-
-    if (mergeLanders.Enabled)
-    {
-        landerState = mergeLanders.Enabled ? (landerState == LanderState.Retracted ? LanderState.Deploying : LanderState.Retracting) : LanderState.Retracted;
-    }
-
-    // --- DRILL ROTOR CODE ---
-
-    bottomLcdText.Add("Drill:");
-    // calculate target velocity for outer rotor
-    float drillOuterRotorTargetVelocity = (float)(drillInnerRotor.TargetVelocityRPM * drillRatio);
-    bottomLcdText.Add("   Outer Target: " + drillOuterRotorTargetVelocity.ToString("F2"));
-
-    if (mergeDrillExecute.Enabled)
-    {
-        drillOuterRotor.TargetVelocityRPM = drillOuterRotorTargetVelocity;
-        drillInnerRotor.TargetVelocityRPM = drillRotorVelocity;
-        drill.Enabled = true;
-        drillState = DrillState.Drilling;
-        // diasable so we don' mess up the ship right now.
-        foreach (var piston in drillPistons)
-        {
-            piston.Velocity = 0.0005f;
-            topLcdText.Add("  Pistons: " + piston.CustomName + " " + piston.CurrentPosition.ToString("F2"));
-        }
-    }
-    else
-    {
-        drillInnerRotor.TargetVelocityRPM = 0f;
-        drillOuterRotor.TargetVelocityRPM = 0f;
-        drill.Enabled = false;
-        drillState = mergeDrillRetract.Enabled ? DrillState.Retracting : DrillState.Idle;
-        foreach (var piston in drillPistons)
-        {
-            piston.Velocity = mergeDrillRetract.Enabled ? -0.6f : 0f;
-            topLcdText.Add("Piston: " + piston.CustomName + " " + piston.CurrentPosition.ToString("F2"));
-        }
-    }
-
-    // print rotor angles
-    bottomLcdText.Add("Rotor Angles: "
-        + " Inner: " + drillInnerRotor.Angle.ToString("F2")
-        + " / Outer: " + drillOuterRotor.Angle.ToString("F2")
-    );
-
-    bottomLcdText.Add(" Rotor Velocities: "
-        + " Inner: " + drillInnerRotor.TargetVelocityRPM.ToString("F2")
-        + " / Outer: " + drillOuterRotor.TargetVelocityRPM.ToString("F2")
-    );
-    controller1Text.Add("   Drill: " + drillState.ToString());
-
+    controller.GetSurface(0).WriteText("");
+    bottomLcdText.Clear();
+    bottomLcdText.Add("LANDER STATS:");
+    topLcdText.Clear();
+    topLcdText.Add("DRILL STATS:");
 
 
     // --- LANDERS CODE ---
 
     // iterate through landerGroups and update their piston velocities
     bool allLandersLocked = true;
+    bottomLcdText.Add("Landing Gear:");
     foreach (var landerGroup in landerGroups)
     {
-        topLcdText.Add("Lander "
-            + landerGroup.Key.ToString() + ": "
-            + landerGroup.Value.piston.CustomName + " "
-            + landerGroup.Value.gear.IsLocked.ToString()
+        bottomLcdText.Add(
+            +landerGroup.Value.piston.CustomName + " "
+            + " Locked = " + landerGroup.Value.gear.IsLocked.ToString()
         );
 
         landerGroup.Value.handleState(mergeLanders);
@@ -211,6 +179,7 @@ public void Main(string argument, UpdateType updateSource)
     }
 
     // --- REPORT TILT ---
+
     Vector3D gravity = Vector3D.Normalize(controller.GetNaturalGravity());
     Vector3D up = controller.CubeGrid.WorldMatrix.Up;
 
@@ -223,13 +192,12 @@ public void Main(string argument, UpdateType updateSource)
     double rightTilt = Math.Asin(Vector3D.Dot(controller.CubeGrid.WorldMatrix.Right, -gravity)) * 180 / Math.PI;
 
     bottomLcdText.Add("Tilt (degrees):"
-        + "\n   Forward: " + forwardTilt.ToString("F2")
-        + "\n   Right: " + rightTilt.ToString("F2")
+        + "\n   Forward/Back: " + forwardTilt.ToString("F2")
+        + "\n   Right/Left: " + rightTilt.ToString("F2")
     );
 
     // --- CARGO CONTAINER CODE ---
 
-    bool isCargoFull = true;
     float accumulatedPercentageFull = 0f;
     foreach (var cargoContainer in cargoContainers)
     {
@@ -244,36 +212,104 @@ public void Main(string argument, UpdateType updateSource)
     }
 
     float averagePercentageFull = accumulatedPercentageFull / cargoContainers.Count;
-    bottomLcdText.Add("Average Cargo Volume: " + averagePercentageFull.ToString("F2") + "%");
+    bottomLcdText.Add("-----------\nCargo Volume: " + averagePercentageFull.ToString("F2") + "%\n-----------");
 
     if (isCargoFull)
     {
+        drillState = DrillState.Idle;
         // light the beacons of Gondor
-        beacon.Enabled = true;
         beacon.CustomName = SHIP_NAME + "_Cargo_Full";
+        // stop the drill!!
+        drillInnerRotor.TargetVelocityRPM = 0f;
+        drillOuterRotor.TargetVelocityRPM = 0f;
+        drill.Enabled = false;
     }
     else
     {
-        beacon.Enabled = false;
         beacon.CustomName = SHIP_NAME + "_Cargo_Empty";
     }
 
+    // --- DRILL CODE ---
+
+    topLcdText.Add("Piston Positions:");
+    bool pistonsRetracted = true;
+    foreach (var piston in drillPistons)
+    {
+        topLcdText.Add(piston.CustomName + " " + (100f * (piston.CurrentPosition / 10f)).ToString("F2") + "%");
+        if (piston.CurrentPosition > 0f)
+        {
+            pistonsRetracted = false;
+        }
+    }
+    if (pistonsRetracted)
+    {
+        drillState = DrillState.Retracted;
+    }
+
+
+    // calculate target velocity for outer rotor
+    float drillOuterRotorTargetVelocity = (float)(drillInnerRotor.TargetVelocityRPM * DRILL_RATIO);
+
+    // good to drill
+    if (drillState == DrillState.Drilling)
+    {
+        drillOuterRotor.TargetVelocityRPM = drillOuterRotorTargetVelocity;
+        drillInnerRotor.TargetVelocityRPM = DRILL_ROTOR_VELOCITY;
+        drill.Enabled = true;
+        foreach (var piston in drillPistons)
+        {
+            piston.Velocity = DRILL_PISTON_VELOCITY;
+        }
+    }
+    // idle drill
+    else if (drillState == DrillState.Idle)
+    {
+        drillInnerRotor.TargetVelocityRPM = 0f;
+        drillOuterRotor.TargetVelocityRPM = 0f;
+        drill.Enabled = false;
+        foreach (var piston in drillPistons)
+        {
+            piston.Velocity = 0f;
+        }
+    }
+    // retract drill
+    else if (drillState == DrillState.Retracting)
+    {
+        drillInnerRotor.TargetVelocityRPM = 0f;
+        drillOuterRotor.TargetVelocityRPM = 0f;
+        // drillOuterRotor.RotateToAngle(MyRotationDirection.AUTO, 1.8f ) // TODO
+        drill.Enabled = false;
+        foreach (var piston in drillPistons)
+        {
+            piston.Velocity = -0.6f
+        }
+    }
+
+    // print rotor angles
+    topLcdText.Add("Rotor Angles: "
+        + " Inner: " + (drillInnerRotor.Angle * 180 / Math.PI).ToString("F2")
+        + " / Outer: " + ((drillOuterRotor.Angle * 180 / Math.PI) % 360).ToString("F2")
+    );
+
     // -- WRITE TO LCDS ---
+
     lcdBottom.WriteText("");
     lcdBottom.WriteText(string.Join("\n", bottomLcdText));
 
     lcdTop.WriteText("");
     lcdTop.WriteText(string.Join("\n", topLcdText));
 
-    controller.GetSurface(0).WriteText("");
-    controller1Text.Add("    Lander State: " + landerState.ToString());
+    // report on all functional/controllable states
+    controller1Text.Add("FUNCTIONAL STATES: \n");
+    controller1Text.Add("   Drill: " + drillState.ToString());
+    controller1Text.Add("   Lander: " + landerState.ToString());
     controller.GetSurface(0).WriteText(string.Join("\n", controller1Text));
 
-    controller.GetSurface(2).WriteText("--index 2--");
-    controller.GetSurface(3).WriteText("--index 3--");
-    controller.GetSurface(4).WriteText("--index 4--");
-    Me.GetSurface(0).WriteText("THIS IS THE PROGRAMMABLE BLOCK SCREEN");
-    Me.GetSurface(1).WriteText("THIS IS THE PROGRAMMABLE BLOCK SCREEN 2");
+    // controller.GetSurface(2).WriteText("--index 2--");
+    // controller.GetSurface(3).WriteText("--index 3--");
+    // controller.GetSurface(4).WriteText("--index 4--");
+    // Me.GetSurface(0).WriteText("THIS IS THE PROGRAMMABLE BLOCK SCREEN");
+    // Me.GetSurface(1).WriteText("THIS IS THE PROGRAMMABLE BLOCK SCREEN 2");
 
     SetStates();
 }
