@@ -1,3 +1,5 @@
+const string SHIP_NAME = "Gondor_01";
+
 IMyCockpit controller;
 IMyTextPanel lcdTop;
 IMyTextPanel lcdBottom;
@@ -6,11 +8,15 @@ IMyMotorAdvancedStator drillInnerRotor;
 IMyMotorAdvancedStator drillOuterRotor;
 IMyShipDrill drill;
 // Spirograph for the win!!!
-float drillRotorVelocity = 1.3f;
-float drillRatio = 2f;
+float drillRotorVelocity = 0.25f;
+float drillRatio = 8f;
 List<string> bottomLcdText = new List<string>();
 List<string> topLcdText = new List<string>();
 List<string> controller1Text = new List<string>();
+
+List<IMyCargoContainer> cargoContainers = new List<IMyCargoContainer>();
+
+IMyBeacon beacon;
 
 enum LanderState
 {
@@ -62,6 +68,14 @@ public Program()
     {
         drillPistonsGroup.GetBlocksOfType<IMyPistonBase>(drillPistons);
     }
+
+    IMyBlockGroup cargoGroup = GridTerminalSystem.GetBlockGroupWithName("CARGO");
+    if (cargoGroup != null)
+    {
+        cargoGroup.GetBlocksOfType<IMyCargoContainer>(cargoContainers);
+    }
+
+    beacon = GridTerminalSystem.GetBlockWithName("BEACON") as IMyBeacon;
 
     // Write instructions for user
     controller.GetSurface(1).WriteText(
@@ -134,7 +148,6 @@ public void Main(string argument, UpdateType updateSource)
 
     if (mergeDrillExecute.Enabled)
     {
-        // drillOuterRotor.RotateToAngle(MyRotationDirection.AUTO, -1f, drillOuterRotorTargetVelocity);
         drillOuterRotor.TargetVelocityRPM = drillOuterRotorTargetVelocity;
         drillInnerRotor.TargetVelocityRPM = drillRotorVelocity;
         drill.Enabled = true;
@@ -149,7 +162,7 @@ public void Main(string argument, UpdateType updateSource)
     else
     {
         drillInnerRotor.TargetVelocityRPM = 0f;
-        // drillOuterRotor.RotateToAngle(MyRotationDirection.AUTO, 180f, 2f);
+        drillOuterRotor.TargetVelocityRPM = 0f;
         drill.Enabled = false;
         drillState = mergeDrillRetract.Enabled ? DrillState.Retracting : DrillState.Idle;
         foreach (var piston in drillPistons)
@@ -190,7 +203,7 @@ public void Main(string argument, UpdateType updateSource)
         {
             allLandersLocked = false;
         }
-    }   
+    }
 
     if (allLandersLocked)
     {
@@ -214,6 +227,36 @@ public void Main(string argument, UpdateType updateSource)
         + "\n   Right: " + rightTilt.ToString("F2")
     );
 
+    // --- CARGO CONTAINER CODE ---
+
+    bool isCargoFull = true;
+    float accumulatedPercentageFull = 0f;
+    foreach (var cargoContainer in cargoContainers)
+    {
+        IMyInventory inventory = cargoContainer.GetInventory();
+        MyFixedPoint totalVolume = inventory.CurrentVolume;
+        float percentageFull = 100f * (float)totalVolume.ToIntSafe() / (float)inventory.MaxVolume.ToIntSafe();
+        accumulatedPercentageFull += percentageFull;
+        if (percentageFull < 99.5f)
+        {
+            isCargoFull = false;
+        }
+    }
+
+    float averagePercentageFull = accumulatedPercentageFull / cargoContainers.Count;
+    bottomLcdText.Add("Average Cargo Volume: " + averagePercentageFull.ToString("F2") + "%");
+
+    if (isCargoFull)
+    {
+        // light the beacons of Gondor
+        beacon.Enabled = true;
+        beacon.CustomName = SHIP_NAME + "_Cargo_Full";
+    }
+    else
+    {
+        beacon.Enabled = false;
+        beacon.CustomName = SHIP_NAME + "_Cargo_Empty";
+    }
 
     // -- WRITE TO LCDS ---
     lcdBottom.WriteText("");
