@@ -5,14 +5,22 @@ IMyMotorStator motor;
 // Going to be using merge blocks to provide user with 1,2,3,4,5,6,7,8,9 key inputs
 IMyShipMergeBlock mergeBlock;
 
+LanderManager landerManager;
+
 public Program()
 {
     Runtime.UpdateFrequency = UpdateFrequency.Update10; // Run every 10 ticks
     remoteControl = GridTerminalSystem.GetBlockWithName("Remote Control") as IMyRemoteControl;
+    if(remoteControl == null){
+        Echo("Remote Control not found");
+        return;
+    }
     controller = GridTerminalSystem.GetBlockWithName("Control Seat") as IMyCockpit;
     screen = GridTerminalSystem.GetBlockWithName("LCD Screen") as IMyTextPanel;
     motor = GridTerminalSystem.GetBlockWithName("Rotor") as IMyMotorStator;
     mergeBlock = GridTerminalSystem.GetBlockWithName("Merge Block") as IMyShipMergeBlock;
+
+    landerManager = new LanderManager(this);
 }
 
 public void Main(string argument, UpdateType updateSource)
@@ -54,7 +62,26 @@ public void Main(string argument, UpdateType updateSource)
     }
 
     screen.WriteText("THIS IS THE LCD SCREEEN");
-    controller.GetSurface(0).WriteText("THIS IS THE CONTROLLER SCREEN");
+    // controller.GetSurface(0).WriteText("THIS IS THE CONTROLLER SCREEN");
     Me.GetSurface(0).WriteText("THIS IS THE PROGRAMMABLE BLOCK SCREEN");
     Me.GetSurface(1).WriteText("THIS IS THE PROGRAMMABLE BLOCK SCREEN 2");
+
+    landerManager.Test();
 }
+
+public class LanderManager
+{
+
+    private readonly Program program;
+
+    public LanderManager(Program program)
+    {
+        this.program = program;
+    }
+
+    public void Test()
+    {
+        program.controller.GetSurface(0).WriteText("TEST");
+    }   
+}
+
