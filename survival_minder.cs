@@ -48,18 +48,10 @@ IMyCockpit controller;
 IMyTextPanel lcdTop;
 IMyTextPanel lcdBottom;
 IMyCameraBlock depthCamera;
-
-List<string> bottomLcdText = new List<string>();
-List<string> topLcdText = new List<string>();
-List<string> controller1Text = new List<string>();
-
+IMyBeacon beacon;
 List<IMyCargoContainer> cargoContainers = new List<IMyCargoContainer>();
 
-IMyBeacon beacon;
-
-
-
-enum DrillState
+public enum DrillState
 {
     Drilling,
     Idle,
@@ -67,7 +59,7 @@ enum DrillState
     Retracted,
     Error
 }
-enum LanderState
+public enum LanderState
 {
     Deploying,
     Deployed,
@@ -83,30 +75,31 @@ DrillManager drillManager;
 double depthCameraDistanceToGround = 0f;
 bool isCargoFull = true;
 
+List<string> bottomLcdText = new List<string>();
+List<string> topLcdText = new List<string>();
+List<string> controller1Text = new List<string>();
+
 public class LanderManager
 {
     private readonly Program program;
-
     private Dictionary<int, LanderGroup> landerGroups = new Dictionary<int, LanderGroup>();
-    private LanderState currentState = LanderState.Error;
-    private IMyShipMergeBlock mergeLanders;
-
+    public LanderState currentState = LanderState.Error;
+    IMyShipMergeBlock mergeLanders;
     bool allLandersLocked = true;
+    bool allPistonsRetracted = true;
+    public string stateMessage = "";
 
-    float allPistonsRetracted = true;
-    string stateMessage = "";
-
-    public LanderManager(Program program, IMyGridTerminalSystem gridTerminalSystem)
+    public LanderManager(Program program)
     {
         this.program = program;
-        mergeLanders = GridTerminalSystem.GetBlockWithName(program.MERGE_LANDERS) as IMyShipMergeBlock;
+        mergeLanders = program.GridTerminalSystem.GetBlockWithName(MERGE_LANDERS) as IMyShipMergeBlock;
         InitLanderBlocks();
     }
 
     // Initialize lander groups
     private void InitLanderBlocks()
     {
-        IMyBlockGroup foundLanders = GridTerminalSystem.GetBlockGroupWithName(program.LANDERS);
+        IMyBlockGroup foundLanders = program.GridTerminalSystem.GetBlockGroupWithName(LANDERS);
         if (foundLanders != null)
         {
             foundLanders.GetBlocksOfType<IMyCubeBlock>(null, (block) =>
@@ -146,7 +139,7 @@ public class LanderManager
         foreach (var landerGroup in landerGroups)
         {
             program.bottomLcdText.Add(
-                +landerGroup.Value.piston.CustomName + " "
+                landerGroup.Value.piston.CustomName + " "
                 + " Locked = " + landerGroup.Value.gear.IsLocked.ToString()
             );
 
@@ -172,11 +165,11 @@ public class LanderManager
             currentState = LanderState.Deployed;
             stateMessage = "Ready to drill";
         }
-        else if (landerGroups.Values.Any(group => group.currentState == 'retracting'))
+        else if (landerGroups.Values.Any(group => group.currentState == "retracting"))
         {
             currentState = LanderState.Retracting;
         }
-        else if (landerGroups.Values.Any(group => group.currentState == 'deploying'))
+        else if (landerGroups.Values.Any(group => group.currentState == "deploying"))
         {
             currentState = LanderState.Deploying;
 
@@ -187,7 +180,7 @@ public class LanderManager
         }
         else
         {
-            if (landerGroups.Values.Any(group => group.currentState == 'drilling'))
+            if (landerGroups.Values.Any(group => group.currentState == "drilling"))
             {
                 stateMessage = "Cannot change lander state while drilling";
             }
@@ -208,47 +201,47 @@ public class DrillManager
     IMyShipMergeBlock mergeDrillExecute; // key 4
     IMyShipMergeBlock mergeDrillRetract; // key 5
     IMyShipDrill drill;
-    DrillState currentState = DrillState.Error;
+    public DrillState currentState = DrillState.Error;
     List<IMyPistonBase> drillPistons = new List<IMyPistonBase>();
     bool pistonsRetracted = true;
-    float drillOuterRotorTargetVelocity
-    string stateMessage = "";
+    float drillOuterRotorTargetVelocity;
+    public string stateMessage = "";
 
     public DrillManager(Program program)
     {
         this.program = program;
-        mergeDrillExecute = GridTerminalSystem.GetBlockWithName(program.MERGE_DRILL_EXECUTE) as IMyShipMergeBlock;
+        mergeDrillExecute = program.GridTerminalSystem.GetBlockWithName(MERGE_DRILL_EXECUTE) as IMyShipMergeBlock;
         if (mergeDrillExecute == null)
         {
-            throw new Exception($"Block: {program.MERGE_DRILL_EXECUTE} not found");
+            throw new Exception($"Block: {MERGE_DRILL_EXECUTE} not found");
         }
-        mergeDrillRetract = GridTerminalSystem.GetBlockWithName(program.MERGE_DRILL_RETRACT) as IMyShipMergeBlock;
+        mergeDrillRetract = program.GridTerminalSystem.GetBlockWithName(MERGE_DRILL_RETRACT) as IMyShipMergeBlock;
         if (mergeDrillRetract == null)
         {
-            throw new Exception($"Block: {program.MERGE_DRILL_RETRACT} not found");
+            throw new Exception($"Block: {MERGE_DRILL_RETRACT} not found");
         }
 
-        drillInnerRotor = GridTerminalSystem.GetBlockWithName(program.DRILL_INNER_ROTOR) as IMyMotorAdvancedStator;
+        drillInnerRotor = program.GridTerminalSystem.GetBlockWithName(DRILL_INNER_ROTOR) as IMyMotorAdvancedStator;
         if (drillInnerRotor == null)
         {
-            throw new Exception($"Block: {program.DRILL_INNER_ROTOR} not found");
+            throw new Exception($"Block: {DRILL_INNER_ROTOR} not found");
         }
-        drillOuterRotor = GridTerminalSystem.GetBlockWithName(program.DRILL_OUTER_ROTOR) as IMyMotorAdvancedStator;
+        drillOuterRotor = program.GridTerminalSystem.GetBlockWithName(DRILL_OUTER_ROTOR) as IMyMotorAdvancedStator;
         if (drillOuterRotor == null)
         {
-            throw new Exception($"Block: {program.DRILL_OUTER_ROTOR} not found");
+            throw new Exception($"Block: {DRILL_OUTER_ROTOR} not found");
         }
 
-        drill = GridTerminalSystem.GetBlockWithName(program.DRILL) as IMyShipDrill;
+        drill = program.GridTerminalSystem.GetBlockWithName(DRILL) as IMyShipDrill;
         if (drill == null)
         {
-            throw new($"Block {program.DRILL} not found");
+            throw new Exception($"Block {DRILL} not found");
         }
         // get drill pistons from group name "DRILL_Pistons"
-        IMyBlockGroup drillPistonsGroup = GridTerminalSystem.GetBlockGroupWithName(program.DRILL_PISTONS);
+        IMyBlockGroup drillPistonsGroup = program.GridTerminalSystem.GetBlockGroupWithName(DRILL_PISTONS);
         if (drillPistonsGroup == null)
         {
-            throw new Exection($"Block group: {program.DRILL_PISTONS} not found");
+            throw new Exception($"Block group: {DRILL_PISTONS} not found");
         }
         drillPistonsGroup.GetBlocksOfType<IMyPistonBase>(drillPistons);
         drillPistonsGroup.GetBlocksOfType<IMyPistonBase>(drillPistons);
@@ -269,7 +262,7 @@ public class DrillManager
             drill.Enabled = true;
             foreach (var piston in drillPistons)
             {
-                if (depthCameraDistanceToGround < DRILL_QUICK_LOWER_DISTANCE)
+                if (program.depthCameraDistanceToGround < DRILL_QUICK_LOWER_DISTANCE)
                 {
                     piston.Velocity = 0.3f;
                 }
@@ -284,11 +277,11 @@ public class DrillManager
         {
             drillInnerRotor.TargetVelocityRPM = 0f;
             // drillOuterRotor.TargetVelocityRPM = 0f;
-            drillOuterRotor.RotateToAngle(MyRotationDirection.AUTO, Math.PI, 1.8f)
+            drillOuterRotor.RotateToAngle(MyRotationDirection.AUTO, (float)Math.PI, 1.8f);
             drill.Enabled = false;
             foreach (var piston in drillPistons)
             {
-                piston.Velocity = -0.6f
+                piston.Velocity = -0.6f;
             }
         }
         else
@@ -304,31 +297,35 @@ public class DrillManager
         }
 
         // print rotor angles
-        topLcdText.Add("Rotor Angles: "
+        program.topLcdText.Add("Rotor Angles: "
             + " Inner: " + (drillInnerRotor.Angle * 180 / Math.PI).ToString("F2")
             + " / Outer: " + ((drillOuterRotor.Angle * 180 / Math.PI) % 360).ToString("F2")
         );
     }
 
-    public checkState()
+    public void checkState()
     {
-        topLcdText.Add("Piston Extensions:");
-        currentState = DrillState.Idle;
+        program.topLcdText.Add("Piston Extensions:");
         pistonsRetracted = true;
         foreach (var piston in drillPistons)
         {
-            topLcdText.Add(piston.CustomName + " " + (100f * (piston.CurrentPosition / 10f)).ToString("F2") + "%");
+            program.topLcdText.Add(piston.CustomName + " " + (100f * (piston.CurrentPosition / 10f)).ToString("F2") + "%");
             if (piston.CurrentPosition > 0f)
             {
                 pistonsRetracted = false;
             }
         }
-        
+        currentState = DrillState.Idle;
+        if (program.isCargoFull)
+        {
+            stateMessage = "Cargo is full";
+            return;
+        }
 
         if (mergeDrillExecute.Enabled)
         {
             // The user wants to drill
-            if (program.landerManager.currentState !== LanderState.Deployed)
+            if (program.landerManager.currentState != LanderState.Deployed)
             {
                 stateMessage = "Lander must be deployed to drill";
                 currentState = DrillState.Idle;
@@ -399,7 +396,7 @@ public Program()
     IMyBlockGroup cargoGroup = GridTerminalSystem.GetBlockGroupWithName("CARGO");
     if (cargoGroup != null)
     {
-        cargoGroup.GetBlocksOfType<IMyCargoContainer>(cargoContainers);`
+        cargoGroup.GetBlocksOfType<IMyCargoContainer>(cargoContainers);
     }
     else
     {
@@ -421,6 +418,7 @@ public Program()
     );
 
     landerManager = new LanderManager(this);
+    drillManager = new DrillManager(this);
 }
 
 // Report distance to the ground using the depth camera
@@ -461,7 +459,6 @@ private void reportTilt()
 
 private void checkCargo()
 {
-
     float accumulatedPercentageFull = 0f;
     foreach (var cargoContainer in cargoContainers)
     {
@@ -480,13 +477,7 @@ private void checkCargo()
 
     if (isCargoFull)
     {
-        currentState = DrillState.Idle;
-        // light the beacons of Gondor
         beacon.CustomName = SHIP_NAME + "_Cargo_Full";
-        // stop the drill!!
-        drillInnerRotor.TargetVelocityRPM = 0f;
-        drillOuterRotor.TargetVelocityRPM = 0f;
-        drill.Enabled = false;
     }
     else
     {
@@ -527,24 +518,21 @@ public void Main(string argument, UpdateType updateSource)
     // controller.GetSurface(4).WriteText("--index 4--");
     // Me.GetSurface(0).WriteText("THIS IS THE PROGRAMMABLE BLOCK SCREEN");
     // Me.GetSurface(1).WriteText("THIS IS THE PROGRAMMABLE BLOCK SCREEN 2");
-
-    SetStates();
 }
 
 public class LanderGroup
 {
     public IMyPistonBase piston;
     public IMyLandingGear gear;
-
-    public string currentState = 'idle'
+    public string currentState = "idle";
     // returns the state of the lander group
     public void handleState(Program program, IMyShipMergeBlock mergeLanders)
     {
-        if (program.drillManager.currentState !== DrillState.Retracted)
+        if (program.drillManager.currentState != DrillState.Retracted)
         {
             // cant do anything while drilling
             piston.Velocity = 0f;
-            currentState = 'drilling';
+            currentState = "drilling";
             return;
         }
 
@@ -553,19 +541,19 @@ public class LanderGroup
             if (gear.IsLocked)
             {
                 piston.Velocity = 0f;
-                currentState = 'idle';
+                currentState = "idle";
             }
             else
             {
                 piston.Velocity = 0.6f;
-                currentState = 'deploying';
+                currentState = "deploying";
             }
         }
         else
         {
             gear.Unlock();
             piston.Velocity = -0.6f;
-            currentState = 'retracting';
+            currentState = "retracting";
         }
     }
 }
