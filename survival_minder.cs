@@ -29,7 +29,7 @@ const string DEPTH_CAMERA = "CAMERA_Depth";
 
 // +++ GROUP NAMES +++
 // group that contains all the drill pistons
-const string DRILL_PISTONS = "PISTONS_Drill";
+const string DRILL_PISTONS = "DRILL_PISTONS";
 // Group that contains all the lander blocks, including all pistons and landing gears
 const string LANDERS = "LANDERS";
 // group that contains all the cargo containers for drill ore
@@ -83,8 +83,8 @@ public class LanderManager
 {
     private readonly Program program;
     private Dictionary<int, LanderGroup> landerGroups = new Dictionary<int, LanderGroup>();
-    public LanderState currentState = LanderState.Error;
-    IMyShipMergeBlock mergeLanders;
+    public LanderState currentState = LanderState.Retracted;
+    public IMyShipMergeBlock mergeLanders;
     bool allLandersLocked = true;
     bool allPistonsRetracted = true;
     public string stateMessage = "";
@@ -165,6 +165,10 @@ public class LanderManager
             currentState = LanderState.Deployed;
             stateMessage = "Ready to drill";
         }
+        else if (allPistonsRetracted)
+        {
+            currentState = LanderState.Retracted;
+        }
         else if (landerGroups.Values.Any(group => group.currentState == "retracting"))
         {
             currentState = LanderState.Retracting;
@@ -173,10 +177,6 @@ public class LanderManager
         {
             currentState = LanderState.Deploying;
 
-        }
-        else if (allPistonsRetracted)
-        {
-            currentState = LanderState.Retracted;
         }
         else
         {
@@ -201,7 +201,7 @@ public class DrillManager
     IMyShipMergeBlock mergeDrillExecute; // key 4
     IMyShipMergeBlock mergeDrillRetract; // key 5
     IMyShipDrill drill;
-    public DrillState currentState = DrillState.Error;
+    public DrillState currentState = DrillState.Retracted;
     List<IMyPistonBase> drillPistons = new List<IMyPistonBase>();
     bool pistonsRetracted = true;
     float drillOuterRotorTargetVelocity;
@@ -254,30 +254,35 @@ public class DrillManager
         // In this case we're checking state first, drills are dependend on the landers being in the correct state
         checkState();
 
+        double outerRotorAngle = (drillOuterRotor.Angle * 180 / Math.PI) % 360f;
+
         // good to drill
         if (currentState == DrillState.Drilling)
         {
+            // If we are drilling then turn the retract merge off
+            mergeDrillRetract.Enabled = false;
+            program.landerManager.mergeLanders.Enabled = false;
             drillOuterRotor.TargetVelocityRPM = drillOuterRotorTargetVelocity;
             drillInnerRotor.TargetVelocityRPM = DRILL_ROTOR_VELOCITY;
             drill.Enabled = true;
             foreach (var piston in drillPistons)
             {
-                if (program.depthCameraDistanceToGround < DRILL_QUICK_LOWER_DISTANCE)
-                {
-                    piston.Velocity = 0.3f;
-                }
-                else
-                {
-                    piston.Velocity = DRILL_PISTON_VELOCITY;
-                }
+                piston.Velocity = DRILL_PISTON_VELOCITY;
             }
         }
         // retract drill
         else if (currentState == DrillState.Retracting)
         {
+            program.landerManager.mergeLanders.Enabled = false;
             drillInnerRotor.TargetVelocityRPM = 0f;
-            // drillOuterRotor.TargetVelocityRPM = 0f;
-            drillOuterRotor.RotateToAngle(MyRotationDirection.AUTO, (float)Math.PI, 1.8f);
+            if (outerRotorAngle > 185f || outerRotorAngle < 175f)
+            {
+                drillOuterRotor.TargetVelocityRPM = 0.4f;
+            }
+            else
+            {
+                drillOuterRotor.TargetVelocityRPM = 0f;
+            }
             drill.Enabled = false;
             foreach (var piston in drillPistons)
             {
@@ -299,7 +304,7 @@ public class DrillManager
         // print rotor angles
         program.topLcdText.Add("Rotor Angles: "
             + " Inner: " + (drillInnerRotor.Angle * 180 / Math.PI).ToString("F2")
-            + " / Outer: " + ((drillOuterRotor.Angle * 180 / Math.PI) % 360).ToString("F2")
+            + " / Outer: " + (outerRotorAngle).ToString("F2")
         );
     }
 
@@ -347,14 +352,14 @@ public class DrillManager
                 return;
             }
 
-            if (pistonsRetracted)
-            {
-                currentState = DrillState.Retracted;
-                stateMessage = "";
-                return;
-            }
-
             currentState = DrillState.Retracting;
+            stateMessage = "";
+            return;
+        }
+
+        if (pistonsRetracted)
+        {
+            currentState = DrillState.Retracted;
             stateMessage = "";
             return;
         }
@@ -408,6 +413,7 @@ public Program()
     {
         throw new Exception($"Block {DEPTH_CAMERA} not found");
     }
+    depthCamera.EnableRaycast = true;
 
     // Write instructions for user
     controller.GetSurface(1).WriteText(
@@ -460,6 +466,7 @@ private void reportTilt()
 private void checkCargo()
 {
     float accumulatedPercentageFull = 0f;
+    isCargoFull = true;
     foreach (var cargoContainer in cargoContainers)
     {
         IMyInventory inventory = cargoContainer.GetInventory();
@@ -499,7 +506,7 @@ public void Main(string argument, UpdateType updateSource)
     checkCargo();
     handleDepthCamera();
     landerManager.Main();
-
+    drillManager.Main();
 
     lcdBottom.WriteText("");
     lcdBottom.WriteText(string.Join("\n", bottomLcdText));
@@ -512,12 +519,6 @@ public void Main(string argument, UpdateType updateSource)
     controller1Text.Add("Drill: " + drillManager.currentState.ToString() + " " + drillManager.stateMessage);
     controller1Text.Add("Lander: " + landerManager.currentState.ToString() + " " + landerManager.stateMessage);
     controller.GetSurface(0).WriteText(string.Join("\n", controller1Text));
-
-    // controller.GetSurface(2).WriteText("--index 2--");
-    // controller.GetSurface(3).WriteText("--index 3--");
-    // controller.GetSurface(4).WriteText("--index 4--");
-    // Me.GetSurface(0).WriteText("THIS IS THE PROGRAMMABLE BLOCK SCREEN");
-    // Me.GetSurface(1).WriteText("THIS IS THE PROGRAMMABLE BLOCK SCREEN 2");
 }
 
 public class LanderGroup
