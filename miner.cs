@@ -1,16 +1,20 @@
-/**
-    Developed by Klynicol
-    https://github.com/klynicol
-*/
+
+// When in the side drill mode, we limit the angle of the drill rotor
+// to drill a hole within a given set of angles
+const bool LIMIT_DRILL_ROTOR_ANGLE = true;
+const float DRILL_ROTOR_UPPER = 240f; //10
+const float DRILL_ROTOR_LOWER = 140f;
+const float SIDE_DRILL_PISTON_VELOCITY = 0.0035f;
 
 
-// +++ BLOCK NAMES +++
 // Merge block that controls all landers
 const string MERGE_LANDERS = "MERGE_Landers";
 // Merge block that controls the drill
 const string MERGE_DRILL_EXECUTE = "MERGE_DrillExecute";
 // Merge block that controls the drill
 const string MERGE_DRILL_RETRACT = "MERGE_DrillRetract";
+// Merge block that controls the drill mode true = down, false = side
+const string MERGE_DRILL_MODE = "MERGE_DrillMode";
 // Inner rotor of the drill
 const string DRILL_INNER_ROTOR = "DRILL_InnerRotor";
 // Outer rotor of the drill
@@ -34,6 +38,10 @@ const string DRILL_PISTONS = "DRILL_PISTONS";
 const string LANDERS = "LANDERS";
 // group that contains all the cargo containers for drill ore
 const string CARGO = "CARGO";
+// group that contains all the side drills
+const string SIDE_DRILLS = "SIDE_DRILLS";
+// group that contains all the side drill pistons
+const string SIDE_DRILL_PISTONS = "SIDE_DRILL_PISTONS";
 
 // +++ CONSTANTS +++ Only change these if you know what you're doing
 const string SHIP_NAME = "Gondor_01";
@@ -68,7 +76,6 @@ public enum LanderState
     Error
 }
 
-LanderManager landerManager;
 DrillManager drillManager;
 
 // globals
@@ -200,12 +207,20 @@ public class DrillManager
     IMyMotorAdvancedStator drillOuterRotor;
     IMyShipMergeBlock mergeDrillExecute; // key 4
     IMyShipMergeBlock mergeDrillRetract; // key 5
+    IMyShipMergeBlock mergeDrillMode; // key 6
     IMyShipDrill drill;
+    List<IMyShipDrill> sideDrills = new List<IMyShipDrill>();
+    List<IMyPistonBase> sideDrillPistons = new List<IMyPistonBase>();
     public DrillState currentState = DrillState.Retracted;
     List<IMyPistonBase> drillPistons = new List<IMyPistonBase>();
     bool pistonsRetracted = true;
     float drillOuterRotorTargetVelocity;
     public string stateMessage = "";
+
+    private bool lastMergeEnabled = false;
+    private bool lastCargoFull = false;
+    private float calculatedSideDrillPistonVelocity;
+    private bool sideDrillDirectionSwapAction = false;
 
     public DrillManager(Program program)
     {
@@ -219,6 +234,12 @@ public class DrillManager
         if (mergeDrillRetract == null)
         {
             throw new Exception($"Block: {MERGE_DRILL_RETRACT} not found");
+        }
+
+        mergeDrillMode = program.GridTerminalSystem.GetBlockWithName(MERGE_DRILL_MODE) as IMyShipMergeBlock;
+        if (mergeDrillMode == null)
+        {
+            throw new Exception($"Block: {MERGE_DRILL_MODE} not found");
         }
 
         drillInnerRotor = program.GridTerminalSystem.GetBlockWithName(DRILL_INNER_ROTOR) as IMyMotorAdvancedStator;
@@ -244,125 +265,193 @@ public class DrillManager
             throw new Exception($"Block group: {DRILL_PISTONS} not found");
         }
         drillPistonsGroup.GetBlocksOfType<IMyPistonBase>(drillPistons);
-        drillPistonsGroup.GetBlocksOfType<IMyPistonBase>(drillPistons);
 
-        drillOuterRotorTargetVelocity = (float)(drillInnerRotor.TargetVelocityRPM * DRILL_RATIO);
+        IMyBlockGroup sideDrillPistonsGroup = program.GridTerminalSystem.GetBlockGroupWithName(SIDE_DRILL_PISTONS);
+        if (sideDrillPistonsGroup == null)
+        {
+            throw new Exception($"Block group: {SIDE_DRILL_PISTONS} not found");
+        }
+        sideDrillPistonsGroup.GetBlocksOfType<IMyPistonBase>(sideDrillPistons);
+
+
+        IMyBlockGroup sideDrillsGroup = program.GridTerminalSystem.GetBlockGroupWithName(SIDE_DRILLS);
+        if (sideDrillsGroup == null)
+        {
+            throw new Exception($"Block group: {SIDE_DRILLS} not found");
+        }
+        sideDrillsGroup.GetBlocksOfType<IMyShipDrill>(sideDrills);
+
+        drillOuterRotorTargetVelocity = (float)(DRILL_ROTOR_VELOCITY * DRILL_RATIO);
+        /**
+        const float DRILL_ROTOR_UPPER = 240f; //10
+        const float DRILL_ROTOR_LOWER = 180f;
+        The side drill velocity assumes that the drill rotor is at 360 degrees
+        so we need to scale the velocity based on the angle of the drill rotor
+        */
+        float angleDifference = DRILL_ROTOR_UPPER - DRILL_ROTOR_LOWER;
+        if (DRILL_ROTOR_UPPER < DRILL_ROTOR_LOWER)
+        {
+            angleDifference = (360f + DRILL_ROTOR_UPPER) - DRILL_ROTOR_LOWER;
+        }
+        calculatedSideDrillPistonVelocity = SIDE_DRILL_PISTON_VELOCITY + (SIDE_DRILL_PISTON_VELOCITY * (1 - (angleDifference / 360f)));
+
+        program.Echo("Calculated Side Drill Piston Velocity: " + calculatedSideDrillPistonVelocity.ToString("F5"));
+
         program.Echo("Drill Outer Rotor Target Velocity: " + drillOuterRotorTargetVelocity.ToString("F2"));
     }
 
     public void Main()
     {
-        // In this case we're checking state first, drills are dependend on the landers being in the correct state
-        checkState();
 
         double outerRotorAngle = (drillOuterRotor.Angle * 180 / Math.PI) % 360f;
+        double innerRotorAngle = (drillInnerRotor.Angle * 180 / Math.PI);
 
         // good to drill
-        if (currentState == DrillState.Drilling)
+        if (lastMergeEnabled != mergeDrillExecute.Enabled)
         {
-            // If we are drilling then turn the retract merge off
-            mergeDrillRetract.Enabled = false;
-            program.landerManager.mergeLanders.Enabled = false;
-            drillOuterRotor.TargetVelocityRPM = drillOuterRotorTargetVelocity;
+            if (mergeDrillExecute.Enabled && !program.isCargoFull)
+            {
+                // If we are drilling then turn the retract merge off
+                stateMessage = "Starting drill, merge drill action";
+                startDrill();
+            }
+            else
+            {
+                stateMessage = "Cannot start drill while cargo is full";
+                stopDrill();
+            }
+            lastMergeEnabled = mergeDrillExecute.Enabled;
+        }
+
+        // putting cargo check here to prevent the drill from running when the cargo is full
+        if (lastCargoFull != program.isCargoFull)
+        {
+            if (program.isCargoFull && mergeDrillExecute.Enabled)
+            {
+                startDrill();
+                stateMessage = "Cargo is full, stopping drill";
+            }
+            else
+            {
+                stopDrill();
+                stateMessage = "Cargo is empty, starting drill";
+            }
+            lastCargoFull = program.isCargoFull;
+        }
+
+
+        if (LIMIT_DRILL_ROTOR_ANGLE && mergeDrillExecute.Enabled && !mergeDrillMode.Enabled && !sideDrillDirectionSwapAction)
+        {
+            sideDrillDirectionSwapAction = true;
+            // rotate the dril back and forth betwen the upper and lower angles
+            if (innerRotorAngle >= DRILL_ROTOR_UPPER)
+            {
+                // WE ARE CURRENTLY RUNNING IN A POSITIVE ROTOR VELOCITY
+                // WE NEED TO CHANGE THE DIRECTION OF THE ROTOR VELOCITY
+                // wait 1 seconds before changing the direction
+                wait(1000);
+                drillInnerRotor.TargetVelocityRPM = -DRILL_ROTOR_VELOCITY;
+            }
+            else if (innerRotorAngle <= DRILL_ROTOR_LOWER)
+            {
+                // WE ARE CURRENTLY RUNNING IN A NEGATIVE ROTOR VELOCITY
+                // WE NEED TO CHANGE THE DIRECTION OF THE ROTOR VELOCITY
+                wait(1000);
+                drillInnerRotor.TargetVelocityRPM = DRILL_ROTOR_VELOCITY;
+            }
+            sideDrillDirectionSwapAction = false;
+        }
+
+        foreach (var piston in drillPistons)
+        {
+            program.topLcdText.Add(piston.CustomName + " " + (100f * (piston.CurrentPosition / 10f)).ToString("F2") + "%");
+        }
+
+        foreach (var piston in sideDrillPistons)
+        {
+            program.topLcdText.Add(piston.CustomName + " " + (100f * (piston.CurrentPosition / 10f)).ToString("F2") + "%");
+        }
+
+        // print rotor angles
+        program.topLcdText.Add("Rotor Angles: "
+            + " Inner: " + innerRotorAngle.ToString("F2")
+            + " / Outer: " + outerRotorAngle.ToString("F2")
+        );
+    }
+
+    public void wait(int seconds)
+    {
+        long iterations = seconds * 100000000;
+        for (long i = 0; i < iterations; i++)
+        {
+            // waiting
+        }
+    }
+
+    private void startDrill()
+    {
+        mergeDrillRetract.Enabled = false;
+        drill.Enabled = true;
+
+        if (mergeDrillMode.Enabled)
+        {
             drillInnerRotor.TargetVelocityRPM = DRILL_ROTOR_VELOCITY;
-            drill.Enabled = true;
+            // drill down
+            drillOuterRotor.TargetVelocityRPM = drillOuterRotorTargetVelocity;
             foreach (var piston in drillPistons)
             {
                 piston.Velocity = DRILL_PISTON_VELOCITY;
             }
         }
-        // retract drill
-        else if (currentState == DrillState.Retracting)
+        else
         {
-            program.landerManager.mergeLanders.Enabled = false;
-            drillInnerRotor.TargetVelocityRPM = 0f;
-            if (outerRotorAngle > 185f || outerRotorAngle < 175f)
+            drillInnerRotor.TargetVelocityRPM = 0.4f;
+            // drill side
+            foreach (var sideDrill in sideDrills)
             {
-                drillOuterRotor.TargetVelocityRPM = 0.4f;
+                sideDrill.Enabled = true;
             }
-            else
+            foreach (var piston in sideDrillPistons)
             {
-                drillOuterRotor.TargetVelocityRPM = 0f;
+                piston.Velocity = calculatedSideDrillPistonVelocity;
             }
-            drill.Enabled = false;
-            foreach (var piston in drillPistons)
-            {
-                piston.Velocity = -0.6f;
-            }
+        }
+    }
+
+    private void stopDrill()
+    {
+        drillInnerRotor.TargetVelocityRPM = 0f;
+        drillOuterRotor.TargetVelocityRPM = 0f;
+        drill.Enabled = false;
+        foreach (var piston in drillPistons)
+        {
+            piston.Velocity = 0f;
+        }
+        foreach (var sideDrill in sideDrills)
+        {
+            sideDrill.Enabled = false;
+        }
+        foreach (var piston in sideDrillPistons)
+        {
+            piston.Velocity = 0f;
+        }
+    }
+
+    private void retractDrill(double outerRotorAngle)
+    {
+        drillInnerRotor.TargetVelocityRPM = 0f;
+        if (outerRotorAngle > 185f || outerRotorAngle < 175f)
+        {
+            drillOuterRotor.TargetVelocityRPM = 0.4f;
         }
         else
         {
-            // drill is idle, there may be some state preventing it from drilling
-            drillInnerRotor.TargetVelocityRPM = 0f;
             drillOuterRotor.TargetVelocityRPM = 0f;
-            drill.Enabled = false;
-            foreach (var piston in drillPistons)
-            {
-                piston.Velocity = 0f;
-            }
         }
-
-        // print rotor angles
-        program.topLcdText.Add("Rotor Angles: "
-            + " Inner: " + (drillInnerRotor.Angle * 180 / Math.PI).ToString("F2")
-            + " / Outer: " + (outerRotorAngle).ToString("F2")
-        );
-    }
-
-    public void checkState()
-    {
-        program.topLcdText.Add("Piston Extensions:");
-        pistonsRetracted = true;
+        drill.Enabled = false;
         foreach (var piston in drillPistons)
         {
-            program.topLcdText.Add(piston.CustomName + " " + (100f * (piston.CurrentPosition / 10f)).ToString("F2") + "%");
-            if (piston.CurrentPosition > 0f)
-            {
-                pistonsRetracted = false;
-            }
-        }
-        currentState = DrillState.Idle;
-        if (program.isCargoFull)
-        {
-            stateMessage = "Cargo is full";
-            return;
-        }
-
-        if (mergeDrillExecute.Enabled)
-        {
-            // The user wants to drill
-            if (program.landerManager.currentState != LanderState.Deployed)
-            {
-                stateMessage = "Lander must be deployed to drill";
-                currentState = DrillState.Idle;
-                return;
-            }
-
-            currentState = DrillState.Drilling;
-            stateMessage = "";
-            return;
-        }
-
-        if (mergeDrillRetract.Enabled)
-        {
-            // The user wants to retract the drill
-            if (mergeDrillExecute.Enabled)
-            {
-                stateMessage = "Cannot retract while drilling";
-                currentState = DrillState.Idle;
-                return;
-            }
-
-            currentState = DrillState.Retracting;
-            stateMessage = "";
-            return;
-        }
-
-        if (pistonsRetracted)
-        {
-            currentState = DrillState.Retracted;
-            stateMessage = "";
-            return;
+            piston.Velocity = -0.6f;
         }
     }
 }
@@ -424,7 +513,7 @@ public Program()
         + "7) Toggle Landers - (Deploy/Retract)\n"
     );
 
-    landerManager = new LanderManager(this);
+    // landerManager = new LanderManager(this);
     drillManager = new DrillManager(this);
 }
 
@@ -483,14 +572,16 @@ private void checkCargo()
     float averagePercentageFull = accumulatedPercentageFull / cargoContainers.Count;
     bottomLcdText.Add("-----------\nCargo Volume: " + averagePercentageFull.ToString("F2") + "%\n-----------");
 
-    if (isCargoFull)
-    {
-        beacon.CustomName = SHIP_NAME + "_Cargo_Full";
-    }
-    else
-    {
-        beacon.CustomName = SHIP_NAME + "_Cargo_Empty";
-    }
+    // if (isCargoFull)
+    // {
+    //     beacon.CustomName = SHIP_NAME + "_Cargo_Full";
+    // }
+    // else
+    // {
+    //     beacon.CustomName = SHIP_NAME + "_Cargo_Empty";
+    // }
+
+    beacon.CustomName = SHIP_NAME + "_Cargo_" + averagePercentageFull.ToString("F2") + "%";
 }
 
 public void Main(string argument, UpdateType updateSource)
@@ -506,7 +597,7 @@ public void Main(string argument, UpdateType updateSource)
     reportTilt();
     checkCargo();
     handleDepthCamera();
-    landerManager.Main();
+    // landerManager.Main();
     drillManager.Main();
 
     lcdBottom.WriteText("");
@@ -518,7 +609,7 @@ public void Main(string argument, UpdateType updateSource)
     // report on all functional/controllable states
     controller1Text.Add("FUNCTIONAL STATES: \n");
     controller1Text.Add("Drill: " + drillManager.currentState.ToString() + " " + drillManager.stateMessage);
-    controller1Text.Add("Lander: " + landerManager.currentState.ToString() + " " + landerManager.stateMessage);
+    // controller1Text.Add("Lander: " + landerManager.currentState.ToString() + " " + landerManager.stateMessage);
     controller.GetSurface(0).WriteText(string.Join("\n", controller1Text));
 }
 
